@@ -93,7 +93,7 @@ class CocoDataset(torch.utils.data.Dataset):
         data_order = config.DATA_ORDER
         class_weighting = np.array(self.cw_num_instances)
         # class_weighting = np.log2(class_weighting)**2
-        class_weighting = class_weighting**0.3
+        class_weighting = class_weighting**0.5
         # class_weighting[0] = 0
         class_weighting = class_weighting / np.sum(class_weighting)
         np.random.seed()
@@ -252,15 +252,15 @@ class MaskProp(nn.Module):
             nn.Conv2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(256 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
+            nn.Conv2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(256 + 64, 128, (3, 3), padding=(1, 1)), nn.BatchNorm2d(128), self.relu,
-            nn.Conv2d(128, 32, (3, 3), padding=(1, 1)), nn.BatchNorm2d(32), self.relu,
+            nn.Conv2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
+            nn.Conv2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
         )
         self.mask_layer3 = nn.Sequential(
-            nn.Conv2d(32, 10, (3, 3), padding=(1, 1)), nn.BatchNorm2d(10), self.relu,
-            nn.Conv2d(10, 1, (3, 3), padding=(1, 1)), nn.BatchNorm2d(1), self.relu,
+            nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
+            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), self.relu,
         )
         if init_weights:
             for name, child in self.named_children():
@@ -293,15 +293,18 @@ class Classifier(nn.Module):
 
     def __init__(self, init_weights=True):
         super(Classifier, self).__init__()
-        self.conv1 = nn.Conv2d(640, 256, (3, 3), padding=(1, 1))
+        self.conv1 = nn.Conv2d(640, 512, (3, 3), padding=(1, 1))
+        self.conv2 = nn.Conv2d(512, 512, (3, 3), padding=(1, 1))
         self.gap = nn.AvgPool2d((7, 7), stride=1)
-        self.fc = nn.Linear(256, 81)
+        self.fc = nn.Linear(512, 81)
         self.relu = nn.ReLU(inplace=True)
         if init_weights:
             nn.init.xavier_uniform_(self.conv1.weight)
 
     def forward(self, x):
         x = self.conv1(x)
+        x = self.relu(x)
+        x = self.conv2(x)
         x = self.relu(x)
         x = self.gap(x)
         x = self.relu(x)
@@ -312,6 +315,33 @@ class Classifier(nn.Module):
 #     idx = base_impulse.nonzero()
 #     i1,j1,i2,j2 = idx[:,0].min(),idx[:,1].min(),idx[:,0].max(),idx[:,1].max()
 #     l1,l2,l3 = torch.cuda.FloatTensor(base_impulse.shape).fill_(0)
+
+
+class MultiHGModel(nn.Module):
+
+    def __init__(self):
+        super(MultiHGModel, self).__init__()
+        self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        self.mp0 = MaskProp()
+        self.mp1 = MaskProp()
+        self.class_predictor = Classifier()
+
+    def forward(self, x):
+        im, impulse = x
+        del x
+        inp = torch.cat([im, impulse], dim=1)
+        class_features, mask_features = self.vgg0(inp)
+        m0 = self.mp0([class_features, mask_features])
+        # F.sigmoid ??
+        gen_impulse = F.sigmoid(F.upsample(m0, scale_factor=4))
+        impulse = impulse[:, :-1, ...]
+        inp = torch.cat([im, impulse, gen_impulse], dim=1)
+        class_features, mask_features = self.vgg1(inp)
+        m1 = self.mp1([class_features, mask_features])
+
+        c = self.class_predictor(class_features)
+        return c, [m0, m1]
 
 
 class SimpleHGModel(nn.Module):
@@ -366,8 +396,18 @@ def loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
-    loss1 = bce_class_loss(pred_class, gt_class)
+    loss1 = ce_class_loss(pred_class, gt_class)
     loss2 = mask_loss(pred_masks, gt_mask, mask_weights, bbox, 4)
+    return loss1, loss2
+
+
+def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
+    idx = gt_class[..., 0].nonzero()
+    mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
+    mask_weights[idx] = 0
+    mask_weights = mask_weights.view(-1, 1, 1, 1)
+    loss1 = ce_class_loss(pred_class, gt_class)
+    loss2 = 0.25*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
@@ -396,7 +436,7 @@ def mask_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     w_full = torch.cuda.FloatTensor(gt_mask.shape[0]).fill_(56 * 56).view(-1, 1, 1, 1)
     # b = b
     # f = f
-    l = (b/w_bbox + f/w_full)
+    l = (b / w_bbox + f / w_full)
     # l = f/w_bbox
     # print(b.mean().item(),f.mean().item(),l.mean().item())
     l *= mask_weights
@@ -428,11 +468,19 @@ def ce_class_loss(pred_class, gt_class):
 def bce_class_loss(pred_class, gt_class):
     idx = gt_class.nonzero()[:, 0]
     labels = gt_class.nonzero()[:, 1]
-    w = torch.cuda.FloatTensor(gt_class.shape).fill_(1/81)
-    w[idx, labels] = 1
+    w = torch.cuda.FloatTensor(gt_class.shape).fill_(1 / 160)
+    w[idx, labels] = 1 / 2
     _loss = nn.BCEWithLogitsLoss(weight=w, reduce=False)
     l = _loss(pred_class, gt_class)
     return l.sum(-1).mean()
+
+
+def mml_class_loss(pred_class, gt_class):
+    _loss = nn.MultiMarginLoss(reduce=False)
+    labels = gt_class.nonzero()[:, 1]
+    l = _loss(pred_class, labels)
+    l = l.mean()
+    return l
 
 
 def accuracy(pred_class, batch_one_hot, pred_masks, batch_gt_responses):
@@ -444,7 +492,7 @@ def class_acc(pred_class, batch_one_hot):
         labels = batch_one_hot.nonzero()[:, 1]
         maxs, indices = torch.topk(pred_class, 5, -1)
         # print(labels,indices[:,0])
-        return (indices[:, 0] == labels).sum()/batch_one_hot.shape[0]
+        return (indices[:, 0] == labels).sum() / batch_one_hot.shape[0]
 
 
 def mask_acc(pred_masks, batch_gt_responses):
@@ -454,13 +502,13 @@ def mask_acc(pred_masks, batch_gt_responses):
         pred_masks = F.threshold(pred_masks, 0.5, 0)
         pred_masks = (pred_masks > 0).float()
         # pred_masks = (pred_masks == 1)
-        union = (pred_masks+target) > 0
+        union = (pred_masks + target) > 0
         union = union.sum(-1).sum(-1)
-        intersection = (pred_masks*target) > 0
+        intersection = (pred_masks * target) > 0
         intersection = intersection.sum(-1).sum(-1)
-        iou = intersection/union
+        iou = intersection / union
         iou = iou.sum()
-        return (iou)/target.shape[0]
+        return (iou) / target.shape[0]
 # TODO: modify dummy stub to train code or inference code
 
 

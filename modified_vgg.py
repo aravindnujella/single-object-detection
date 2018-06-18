@@ -220,9 +220,9 @@ class split_conv(nn.Module):
         self.ignore_filters = nn.Conv2d(in_features,cur_out,(3,3),padding=(1,1))
         self.copy_filters = nn.Conv2d(in_features,d_out,(3,3),padding=(1,1))
     def forward(self,x):
-        copy = self.copy_filters(x)
         ignore = self.ignore_filters(x)
-        return torch.cat([copy,ignore],1)
+        copy = self.copy_filters(x)
+        return torch.cat([ignore,copy],1)
 
 
 class split_vgg16_features(nn.Module):
@@ -234,27 +234,27 @@ class split_vgg16_features(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=(2, 2), stride=2)
         # cfg = [3+10,80,80,160,160,320,320,320,640,640,640,640,640,640]
         self.layer1 = nn.Sequential(
-            split_conv(3+d_in,64,16), nn.BatchNorm2d(80), self.relu,
-            split_conv(80,64,16), nn.BatchNorm2d(80), self.relu,
+            split_conv(3+d_in,64,16), self.relu,
+            split_conv(80,64,16), self.relu,
         )
         self.layer2 = nn.Sequential(
-            split_conv(80,128,32), nn.BatchNorm2d(160), self.relu,
-            split_conv(160,128,32), nn.BatchNorm2d(160), self.relu,
+            split_conv(80,128,32), self.relu,
+            split_conv(160,128,32), self.relu,
         )
         self.layer3 = nn.Sequential(
-            split_conv(160,256,64), nn.BatchNorm2d(320), self.relu,
-            split_conv(320,256,64), nn.BatchNorm2d(320), self.relu,
-            split_conv(320,256,64), nn.BatchNorm2d(320), self.relu,
+            split_conv(160,256,64), self.relu,
+            split_conv(320,256,64), self.relu,
+            split_conv(320,256,64), self.relu,
         )
         self.layer4 = nn.Sequential(
-            split_conv(320,512,128), nn.BatchNorm2d(640), self.relu,
-            split_conv(640,512,128), nn.BatchNorm2d(640), self.relu,
-            split_conv(640,512,128), nn.BatchNorm2d(640), self.relu,
+            split_conv(320,512,128), self.relu,
+            split_conv(640,512,128), self.relu,
+            split_conv(640,512,128), self.relu,
         )
         self.layer5 = nn.Sequential(
-            split_conv(640,512,128), nn.BatchNorm2d(640), self.relu,
-            split_conv(640,512,128), nn.BatchNorm2d(640), self.relu,
-            split_conv(640,512,128), nn.BatchNorm2d(640), self.relu,
+            split_conv(640,512,128), self.relu,
+            split_conv(640,512,128), self.relu,
+            split_conv(640,512,128), self.relu,
         )
 
         self.wing_conv5 = nn.Conv2d(640, 128, (3, 3), padding=(1, 1))
@@ -279,15 +279,17 @@ class split_vgg16_features(nn.Module):
         _shapes = [[] for i in range(5)]
         l = 0
         vgg = models.vgg16(pretrained=True)
+        decay = 3
         for child in vgg.features.children():
             if isinstance(child, nn.Conv2d):
                 _shapes[l].append(child.weight.shape)
             elif isinstance(child, nn.MaxPool2d):
                 l += 1
         d_in = self.d_in
-        new_filters = [[] for l in range(5)]
         new_copy = [[] for l in range(5)]
         new_ignore = [[] for l in range(5)]
+        ignore_bias = [[] for l in range(5)]
+        copy_bias = [[] for l in range(5)]
         i = 0; l = 0
         for child in vgg.features.children():
             if isinstance(child, nn.Conv2d):
@@ -299,45 +301,43 @@ class split_vgg16_features(nn.Module):
                 # ignore_filters: cur_out, cur_in + d_in, kernel_shape
                 c = torch.zeros((cur_out, d_in) + kernel_shape)
                 ignore_filters = torch.cat([child.weight, c], 1)
+                # copy_filters: d_out, cur_in + d_in, kernel_shape
                 a = torch.zeros((d_out, cur_in,) + kernel_shape)
-                # nn.init.xavier_uniform_(a)
-                b = np.zeros((d_out, d_in))
+                b = np.zeros((d_out,d_in))
                 if d_out>d_in:
                     idx = np.array([i % d_in for i in range(d_out)])
                     b[range(d_out), idx] = 1
                 else:
                     b = np.eye(d_out,d_in)
                 b = torch.from_numpy(b).unsqueeze(-1).unsqueeze(-1).float()
-                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])/fan_in
-                # w = torch.randint_like(b, 1, d_in + d_out)
-                # b = b / (w**0.5)
-                # print(type(a),type(b))
+                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])/fan_in/2
                 copy_filters = torch.cat([a, b], 1)
-                new_conv = torch.cat([ignore_filters, copy_filters], 0)
-                new_filters[l].append(new_conv)
                 new_ignore[l].append(ignore_filters)
+                ignore_bias[l].append(child.bias)
                 new_copy[l].append(copy_filters)
+                copy_bias[l].append(torch.zeros(d_out))
                 d_in = d_out
                 i += 1
             elif isinstance(child, nn.MaxPool2d):
                 l += 1
                 i = 0
+
         l = 0
         for name, child in self.named_children():
             if name[:-1] == "layer":
                 k = 0
+                print(l)
                 for gc in child.children():
                     if isinstance(gc, split_conv):
-                        # nn.init.xavier_uniform_(gc.copy_filters.weight)
-                        # gc.copy_filters.weight = nn.Parameter(gc.copy_filters.weight)
-                        gc.copy_filters.weight = nn.Parameter(new_copy[l][k])
+                        print(k)
+                        print(gc.copy_filters.weight.shape,gc.copy_filters.bias.shape,copy_bias[l][k].shape)
+                        print(gc.ignore_filters.weight.shape,gc.ignore_filters.bias.shape,ignore_bias[l][k].shape)
+                        # gc.copy_filters.weight = nn.Parameter(new_copy[l][k])
+                        nn.init.xavier_uniform_(gc.copy_filters.weight)
                         gc.ignore_filters.weight = nn.Parameter(new_ignore[l][k])
+                        gc.copy_filters.bias = nn.Parameter(copy_bias[l][k])
+                        gc.ignore_filters.bias = nn.Parameter(ignore_bias[l][k])
                         k += 1
-                        print(gc.copy_filters.weight.shape)
-                        print(gc.ignore_filters.weight.shape,"\n")
-                    elif isinstance(gc, nn.BatchNorm2d):
-                        nn.init.constant_(gc.weight, 1)
-                        nn.init.constant_(gc.bias, 0)
                 l += 1
             elif name[:-1] == "wing_conv":
                 nn.init.xavier_uniform_(child.weight)
@@ -345,11 +345,12 @@ class split_vgg16_features(nn.Module):
 
 if __name__ == '__main__':
     import numpy as np
-    net = split_vgg16_features(pre_trained_weights=False,d_in=4)
+    net = split_vgg16_features(pre_trained_weights=True,d_in=4)
     print(sum([param.numel() for param in net.parameters()]))
-
-    # torch.save(net.state_dict(), "./models/split_vgg16_fseatures_4.pt")
+    torch.save(net.state_dict(), "./models/split_vgg16_features_4.pt")
     # net.load_state_dict(torch.load("./models/vgg11_features.pt"))
     # net_parameters = filter(lambda p: p.requires_grad, net.parameters())
     # params = sum([np.prod(p.size()) for p in net_parameters])
     # print(params)
+
+
