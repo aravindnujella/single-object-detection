@@ -239,13 +239,20 @@ def get_loader(cwid, config, data_dir):
 
 class ConvResample2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_shape, size):
+        super(ConvResample2d, self).__init__()
         self.relu = nn.ReLU(inplace=True)
         self.layer = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_shape),nn.BatchNorm2d(out_channels),
             self.relu,
-            nn.Upsample(size=size,mode='linear',align_corners=False),
+            nn.Upsample(size=size,mode='bilinear',align_corners=True),
         )
-
+        for name, child in self.named_children():
+            for gc in child.children():
+                if isinstance(gc, nn.Conv2d):
+                    nn.init.xavier_uniform_(gc.weight)
+                elif isinstance(gc, nn.BatchNorm2d):
+                    nn.init.constant_(gc.weight, 1)
+                    nn.init.constant_(gc.bias, 0)
     def forward(self, x):
         return self.layer(x)
 
@@ -260,24 +267,18 @@ class MaskProp(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.upsample = nn.Upsample(scale_factor=2)
         self.layer5 = nn.Sequential(
-            # nn.Conv2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
-            ConvResample2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
+            ConvResample2d(640 + 128, 256, (3, 3),(14,14))
         )
         self.layer4 = nn.Sequential(
-            # nn.Conv2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
-            ConvResample2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
+            ConvResample2d(256 + 128, 256, (5, 5),(28,28))
         )
         self.layer3 = nn.Sequential(
-            # nn.Conv2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
-            ConvResample2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
-            # nn.Conv2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
-            ConvResample2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
+            ConvResample2d(256 + 64, 128, (5,5),(56,56)),
+            ConvResample2d(128, 32, (5,5),(56,56))
         )
         self.mask_layer3 = nn.Sequential(
-            # nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
-            ConvResample2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
-            # nn.Conv2d(10, out_channels, (9, 9), padding=(4, 4)), nn.BatchNorm2d(out_channels), self.relu,
-            ConvResample2d(10, out_channels, (9, 9), padding=(4, 4)), nn.BatchNorm2d(out_channels), self.relu,
+            ConvResample2d(32, 10, (5,5),(56,56)),
+            ConvResample2d(10, out_channels, (5,5),(56,56)),
         )
         if init_weights:
             for name, child in self.named_children():
