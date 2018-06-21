@@ -151,9 +151,9 @@ class vgg16_features(nn.Module):
         outs = []
         x = self.layer1(x); x = self.pool(x);
         x = self.layer2(x); x = self.pool(x);
-        x = self.layer3(x); outs.append(self.wing_conv3(x)); x = self.pool(x);
-        x = self.layer4(x); outs.append(self.wing_conv4(x)); x = self.pool(x);
-        x = self.layer5(x); outs.append(self.wing_conv5(x)); x = self.pool(x);
+        x = self.layer3(x); outs.append(F.relu(self.wing_conv3(x))); x = self.pool(x);
+        x = self.layer4(x); outs.append(F.relu(self.wing_conv4(x))); x = self.pool(x);
+        x = self.layer5(x); outs.append(F.relu(self.wing_conv5(x))); x = self.pool(x);
         return x, outs
 
     def init_weights(self):
@@ -279,7 +279,7 @@ class split_vgg16_features(nn.Module):
         _shapes = [[] for i in range(5)]
         l = 0
         vgg = models.vgg16(pretrained=True)
-        decay = 3
+        decay = 9
         for child in vgg.features.children():
             if isinstance(child, nn.Conv2d):
                 _shapes[l].append(child.weight.shape)
@@ -310,7 +310,7 @@ class split_vgg16_features(nn.Module):
                 else:
                     b = np.eye(d_out,d_in)
                 b = torch.from_numpy(b).unsqueeze(-1).unsqueeze(-1).float()
-                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])/fan_in/2
+                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])/fan_in
                 copy_filters = torch.cat([a, b], 1)
                 new_ignore[l].append(ignore_filters)
                 ignore_bias[l].append(child.bias)
@@ -332,8 +332,8 @@ class split_vgg16_features(nn.Module):
                         print(k)
                         print(gc.copy_filters.weight.shape,gc.copy_filters.bias.shape,copy_bias[l][k].shape)
                         print(gc.ignore_filters.weight.shape,gc.ignore_filters.bias.shape,ignore_bias[l][k].shape)
-                        # gc.copy_filters.weight = nn.Parameter(new_copy[l][k])
-                        nn.init.xavier_uniform_(gc.copy_filters.weight)
+                        gc.copy_filters.weight = nn.Parameter(new_copy[l][k])
+                        # nn.init.xavier_uniform_(gc.copy_filters.weight)
                         gc.ignore_filters.weight = nn.Parameter(new_ignore[l][k])
                         gc.copy_filters.bias = nn.Parameter(copy_bias[l][k])
                         gc.ignore_filters.bias = nn.Parameter(ignore_bias[l][k])

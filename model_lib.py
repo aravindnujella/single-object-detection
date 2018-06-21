@@ -237,6 +237,17 @@ def get_loader(cwid, config, data_dir):
                                               )
     return data_loader
 
+class ConvResample2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_shape, size):
+        self.relu = nn.ReLU(inplace=True)
+        self.layer = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_shape),nn.BatchNorm2d(out_channels),
+            self.relu,
+            nn.Upsample(size=size,mode='linear',align_corners=False),
+        )
+
+    def forward(self, x):
+        return self.layer(x)
 
 # proposes masks for single scale feature maps.
 # for multi_scale supervision, use this multiple times
@@ -244,23 +255,29 @@ def get_loader(cwid, config, data_dir):
 
 class MaskProp(nn.Module):
 
-    def __init__(self, init_weights=True):
+    def __init__(self, init_weights=True, out_channels=1):
         super(MaskProp, self).__init__()
         self.relu = nn.ReLU(inplace=True)
         self.upsample = nn.Upsample(scale_factor=2)
         self.layer5 = nn.Sequential(
-            nn.Conv2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
+            # nn.Conv2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
+            ConvResample2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
+            # nn.Conv2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
+            ConvResample2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
-            nn.Conv2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
+            # nn.Conv2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
+            ConvResample2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
+            # nn.Conv2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
+            ConvResample2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
         )
         self.mask_layer3 = nn.Sequential(
-            nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
-            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), self.relu,
+            # nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
+            ConvResample2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
+            # nn.Conv2d(10, out_channels, (9, 9), padding=(4, 4)), nn.BatchNorm2d(out_channels), self.relu,
+            ConvResample2d(10, out_channels, (9, 9), padding=(4, 4)), nn.BatchNorm2d(out_channels), self.relu,
         )
         if init_weights:
             for name, child in self.named_children():
@@ -268,6 +285,9 @@ class MaskProp(nn.Module):
                     for gc in child.children():
                         if isinstance(gc, nn.Conv2d):
                             nn.init.xavier_uniform_(gc.weight)
+                        elif isinstance(gc, nn.BatchNorm2d):
+                            nn.init.constant_(gc.weight, 1)
+                            nn.init.constant_(gc.bias, 0)
 
     def forward(self, x):
         c, m = x
@@ -323,7 +343,7 @@ class MultiHGModel(nn.Module):
         super(MultiHGModel, self).__init__()
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
         self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
-        self.mp0 = MaskProp()
+        self.mp0 = MaskProp(out_channels=4)
         self.mp1 = MaskProp()
         self.class_predictor = Classifier()
 
@@ -334,9 +354,10 @@ class MultiHGModel(nn.Module):
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
         # F.sigmoid ??
-        gen_impulse = F.sigmoid(F.upsample(m0, scale_factor=4))
-        impulse = impulse[:, :-1, ...]
-        inp = torch.cat([im, impulse, gen_impulse], dim=1)
+        # gen_impulse = F.sigmoid(F.upsample(m0, scale_factor=4)).repeat(1,4,1,1)
+        # impulse = impulse[:, 0, ...]
+        gen_impulse = F.upsample(m0, scale_factor=4)
+        inp = torch.cat([im, gen_impulse], dim=1)
         class_features, mask_features = self.vgg1(inp)
         m1 = self.mp1([class_features, mask_features])
 
@@ -363,7 +384,6 @@ class SimpleHGModel(nn.Module):
         inp = torch.cat([im, base_impulse], dim=1)
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
-        outs.append(m0)
         # gen_impulse = F.threshold(F.sigmoid(F.upsample(m0[-1], scale_factor=4)),0.5,0)
 
         # base_impulse = base_impulse[:,:-1,...]
@@ -406,8 +426,8 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
-    loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = 0.25*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss1 = bce_class_loss(pred_class, gt_class)
+    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
