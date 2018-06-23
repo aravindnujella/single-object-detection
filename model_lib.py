@@ -260,7 +260,8 @@ class MaskProp(nn.Module):
         )
         self.mask_layer3 = nn.Sequential(
             nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
-            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), self.relu,
+            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
+            # self.relu,
         )
         if init_weights:
             for name, child in self.named_children():
@@ -407,7 +408,7 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = 0.25*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss2 = mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) #+ mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
@@ -436,8 +437,8 @@ def mask_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     w_full = torch.cuda.FloatTensor(gt_mask.shape[0]).fill_(56 * 56).view(-1, 1, 1, 1)
     # b = b
     # f = f
-    l = (b / w_bbox + f / w_full)
-    # l = f/w_bbox
+    l = (b / w_bbox + w_bbox.mean() * f / w_full)
+    # l = (b+f)/w_bbox
     # print(b.mean().item(),f.mean().item(),l.mean().item())
     l *= mask_weights
     # print(mask_weights.squeeze())

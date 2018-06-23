@@ -310,7 +310,7 @@ class split_vgg16_features(nn.Module):
                 else:
                     b = np.eye(d_out,d_in)
                 b = torch.from_numpy(b).unsqueeze(-1).unsqueeze(-1).float()
-                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])/fan_in/2
+                b = b.repeat([1, 1, kernel_shape[0], kernel_shape[1]])/fan_in
                 copy_filters = torch.cat([a, b], 1)
                 new_ignore[l].append(ignore_filters)
                 ignore_bias[l].append(child.bias)
