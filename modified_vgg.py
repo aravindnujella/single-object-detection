@@ -345,9 +345,9 @@ class split_vgg16_features(nn.Module):
 
 if __name__ == '__main__':
     import numpy as np
-    net = split_vgg16_features(pre_trained_weights=True,d_in=4)
+    net = split_vgg16_features(pre_trained_weights=True,d_in=1)
     print(sum([param.numel() for param in net.parameters()]))
-    torch.save(net.state_dict(), "./models/split_vgg16_features_4.pt")
+    torch.save(net.state_dict(), "./models/split_vgg16_features_1.pt")
     # net.load_state_dict(torch.load("./models/vgg11_features.pt"))
     # net_parameters = filter(lambda p: p.requires_grad, net.parameters())
     # params = sum([np.prod(p.size()) for p in net_parameters])
