@@ -303,7 +303,7 @@ class split_vgg16_features(nn.Module):
                 ignore_filters = torch.cat([child.weight, c], 1)
                 # copy_filters: d_out, cur_in + d_in, kernel_shape
                 a = torch.zeros((d_out, cur_in,) + kernel_shape)
-                b = np.zeros((d_out,d_in))
+                b = np.eye(d_out,d_in)
                 if d_out>d_in:
                     idx = np.array([i % d_in for i in range(d_out)])
                     b[range(d_out), idx] = 1

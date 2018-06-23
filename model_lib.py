@@ -95,7 +95,7 @@ class CocoDataset(torch.utils.data.Dataset):
         data_order = config.DATA_ORDER
         class_weighting = np.array(self.cw_num_instances)
         # class_weighting = np.log2(class_weighting)**2
-        class_weighting = class_weighting**0.6
+        class_weighting = class_weighting**0.5
         # class_weighting[0] = 0
         class_weighting = class_weighting / np.sum(class_weighting)
         np.random.seed()
@@ -123,9 +123,9 @@ class CocoDataset(torch.utils.data.Dataset):
         idx = np.where(small_umask == np.max(small_umask))
         locx, locy = random.choice(list(zip(idx[0],idx[1])))
         # if not np.any(small_umask):
-        #     y1, x1, y2, x2 = self.extract_bbox(umask)
-        #     locx = (y1 + y2) // 2
-        #     locy = (x1 + x2) // 2
+        y1, x1, y2, x2 = self.extract_bbox(umask)
+        locx = (y1 + y2) // 2
+        locy = (x1 + x2) // 2
         # else:
         #     idx = np.where(small_umask)
         #     locx, locy = random.choice(list(zip(idx[0], idx[1])))
@@ -157,7 +157,7 @@ class CocoDataset(torch.utils.data.Dataset):
         num_classes = self.config.NUM_CLASSES
 
         mask = masks[:, :, 0]
-        umask = masks[:, :, 1]
+        umask = masks[:, :, 0]
 
         # very small objects. will be ignored now and retrained later
         # should probably keep crowds like oranges etc
@@ -270,8 +270,7 @@ class MaskProp(nn.Module):
 
     def __init__(self, init_weights=True, out_channels=1):
         super(MaskProp, self).__init__()
-        # self.relu = Clamp(lower=0,upper=3)
-        self.relu = nn.ReLU6(inplace=True)
+        self.relu = nn.ReLU(inplace=True)
         self.upsample = nn.Upsample(scale_factor=2)
         self.layer5 = nn.Sequential(
             nn.Conv2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
@@ -284,8 +283,8 @@ class MaskProp(nn.Module):
             nn.Conv2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
         )
         self.mask_layer3 = nn.Sequential(
-            nn.Conv2d(32, 10, (7, 7), padding=(3, 3)), nn.BatchNorm2d(10), self.relu,
-            nn.Conv2d(10, out_channels, (7, 7), padding=(3, 3)), nn.BatchNorm2d(out_channels),
+            nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
+            nn.Conv2d(10, out_channels, (9, 9), padding=(4, 4)), nn.BatchNorm2d(out_channels),
             # self.relu
         )
         if init_weights:
@@ -340,10 +339,6 @@ class Classifier(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
-# def expand_impulse(base_impulse):
-#     idx = base_impulse.nonzero()
-#     i1,j1,i2,j2 = idx[:,0].min(),idx[:,1].min(),idx[:,0].max(),idx[:,1].max()
-#     l1,l2,l3 = torch.cuda.FloatTensor(base_impulse.shape).fill_(0)
 
 
 class MultiHGModel(nn.Module):
@@ -371,25 +366,22 @@ class MultiHGModel(nn.Module):
         class_features, mask_features = self.vgg1(inp)
         m1 = self.mp1([class_features, mask_features])
 
-        impulse = F.upsample(m1, scale_factor=4)
-        impulse = F.sigmoid(impulse) 
+        # impulse = F.upsample(m1, scale_factor=4)
+        # impulse = F.sigmoid(impulse) 
         
-        inp = torch.cat([im, impulse], dim=1)
-        class_features, mask_features = self.vgg1(inp)
-        m1 = self.mp1([class_features, mask_features])
+        # inp = torch.cat([im, impulse], dim=1)
+        # class_features, mask_features = self.vgg1(inp)
+        # m1 = self.mp1([class_features, mask_features])
 
-        impulse = F.upsample(m1, scale_factor=4)
-        impulse = F.sigmoid(impulse) 
+        # impulse = F.upsample(m1, scale_factor=4)
+        # impulse = F.sigmoid(impulse) 
         
-        inp = torch.cat([im, impulse], dim=1)
-        class_features, mask_features = self.vgg1(inp)
-        m1 = self.mp1([class_features, mask_features])
+        # inp = torch.cat([im, impulse], dim=1)
+        # class_features, mask_features = self.vgg1(inp)
+        # m1 = self.mp1([class_features, mask_features])
 
-        impulse = F.upsample(m1, scale_factor=4)
-        impulse = F.sigmoid(impulse)         
-        
         c = self.class_predictor(class_features)
-        return c, [m1,m1]
+        return c, [m0,m1]
 
 class SimpleHGModel(nn.Module):
 
@@ -479,15 +471,10 @@ def mask_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     f = full_mask_loss(pred_masks, target)
     b = bbox_mask_loss(pred_masks, target, bbox)
     w_bbox = bbox.sum(-1).sum(-1).view(-1, 1, 1, 1)
-    # print(w_bbox.squeeze())
     w_full = torch.cuda.FloatTensor(gt_mask.shape[0]).fill_(56 * 56).view(-1, 1, 1, 1)
-    # b = b
-    # f = f
     l = (b/w_bbox + f / w_full)
     # l = f/w_bbox
-    # print(b.mean().item(),f.mean().item(),l.mean().item())
     l *= mask_weights
-    # print(mask_weights.squeeze())
     return l.sum(-1).sum(-1).mean()
 
 # def mask_loss(pred_masks, gt_mask, mask_weights, scale_down):
