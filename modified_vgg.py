@@ -234,32 +234,32 @@ class split_vgg16_features(nn.Module):
         self.pool = nn.MaxPool2d(kernel_size=(2, 2), stride=2)
         # cfg = [3+10,80,80,160,160,320,320,320,640,640,640,640,640,640]
         self.layer1 = nn.Sequential(
-            split_conv(3+d_in,64,16), self.relu,
-            split_conv(80,64,16), self.relu,
+            split_conv(3+d_in,64,4), self.relu,
+            split_conv(68,64,4), self.relu,
         )
         self.layer2 = nn.Sequential(
-            split_conv(80,128,32), self.relu,
-            split_conv(160,128,32), self.relu,
+            split_conv(68,128,4), self.relu,
+            split_conv(132,128,4), self.relu,
         )
         self.layer3 = nn.Sequential(
-            split_conv(160,256,64), self.relu,
-            split_conv(320,256,64), self.relu,
-            split_conv(320,256,64), self.relu,
+            split_conv(132,256,4), self.relu,
+            split_conv(260,256,4), self.relu,
+            split_conv(260,256,4), self.relu,
         )
         self.layer4 = nn.Sequential(
-            split_conv(320,512,128), self.relu,
-            split_conv(640,512,128), self.relu,
-            split_conv(640,512,128), self.relu,
+            split_conv(260,512,4), self.relu,
+            split_conv(516,512,4), self.relu,
+            split_conv(516,512,4), self.relu,
         )
         self.layer5 = nn.Sequential(
-            split_conv(640,512,128), self.relu,
-            split_conv(640,512,128), self.relu,
-            split_conv(640,512,128), self.relu,
+            split_conv(516,512,4), self.relu,
+            split_conv(516,512,4), self.relu,
+            split_conv(516,512,4), self.relu,
         )
 
-        self.wing_conv5 = nn.Conv2d(640, 128, (3, 3), padding=(1, 1))
-        self.wing_conv4 = nn.Conv2d(640, 128, (3, 3), padding=(1, 1))
-        self.wing_conv3 = nn.Conv2d(320, 64, (3, 3), padding=(1, 1))
+        self.wing_conv5 = nn.Conv2d(516, 128, (3, 3), padding=(1, 1))
+        self.wing_conv4 = nn.Conv2d(516, 128, (3, 3), padding=(1, 1))
+        self.wing_conv3 = nn.Conv2d(260, 64, (3, 3), padding=(1, 1))
 
         # initialize with vgg weights
         if pre_trained_weights == True:
@@ -296,7 +296,7 @@ class split_vgg16_features(nn.Module):
                 cur_in = _shapes[l][i][1]
                 cur_out = _shapes[l][i][0]
                 kernel_shape = _shapes[l][i][2:]
-                d_out = cur_out // 4
+                d_out = 4
                 fan_in = kernel_shape[0] * kernel_shape[1]
                 # ignore_filters: cur_out, cur_in + d_in, kernel_shape
                 c = torch.zeros((cur_out, d_in) + kernel_shape)

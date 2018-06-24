@@ -256,7 +256,7 @@ class MaskProp(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.upsample = nn.Upsample(scale_factor=2)
         self.layer5 = nn.Sequential(
-            nn.Conv2d(640 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
+            nn.Conv2d(516 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer4 = nn.Sequential(
             nn.Conv2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
@@ -301,7 +301,7 @@ class Classifier(nn.Module):
 
     def __init__(self, init_weights=True):
         super(Classifier, self).__init__()
-        self.conv1 = nn.Conv2d(640, 512, (3, 3), padding=(1, 1))
+        self.conv1 = nn.Conv2d(516, 512, (3, 3), padding=(1, 1))
         self.conv2 = nn.Conv2d(512, 512, (3, 3), padding=(1, 1))
         self.gap = nn.AvgPool2d((7, 7), stride=1)
         self.fc = nn.Linear(512, 81)
@@ -358,7 +358,7 @@ class MultiHGModel(nn.Module):
         
         c = self.class_predictor(class_features)
 
-        return c, [m1, m2]
+        return c, [m0, m1]
 
 
 class SimpleHGModel(nn.Module):
@@ -424,7 +424,7 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = bce_class_loss(pred_class, gt_class)
-    loss2 = 0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss2 = mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) #+ mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
