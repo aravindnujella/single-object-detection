@@ -20,7 +20,7 @@ import modified_vgg
 import importlib
 
 import skimage.measure
-
+from scipy import ndimage
 importlib.reload(modified_vgg)
 
 
@@ -79,9 +79,12 @@ class CocoDataset(torch.utils.data.Dataset):
             impulse = impulse * 255
             response = np.squeeze(response) * 255
             bbox = np.squeeze(bbox) * 255
+            image[:,:,0] = np.where(impulse[0],255,image[:,:,0])
+            image[:,:,1] = np.where(impulse[0]==255,255,image[:,:,1])
+            image[:,:,2] = np.where(impulse[0]==255,255,image[:,:,2])
             Image.fromarray(image.astype(np.uint8), "RGB").show()
-            for i in range(impulse.shape[0]):
-                Image.fromarray(impulse[i].astype(np.uint8), "L").show()
+            # for i in range(impulse.shape[0]):
+            #     Image.fromarray(impulse[0].astype(np.uint8), "L").show()
             Image.fromarray(response.astype(np.uint8), "L").show()
             Image.fromarray(bbox.astype(np.uint8), "L").show()
             print(self.config.CLASS_NAMES[np.argmax(one_hot)])
@@ -115,16 +118,19 @@ class CocoDataset(torch.utils.data.Dataset):
 
     def random_impulse(self, umask_obj):
         umask = np.array(umask_obj)
-        small_umask = skimage.measure.block_reduce(umask, (8, 8), np.min)
         w, h = umask.shape
-        if not np.any(small_umask):
-            y1, x1, y2, x2 = self.extract_bbox(umask)
-            locx = (y1 + y2) // 2
-            locy = (x1 + x2) // 2
-        else:
-            idx = np.where(small_umask)
-            locx, locy = random.choice(list(zip(idx[0], idx[1])))
-            locx, locy = locx * 8, locy * 8
+        small_umask = ndimage.convolve(umask, np.ones((16,16)), mode='constant', cval=0.0)
+        idx = np.where(small_umask==np.max(small_umask))
+        locx,locy = random.choice(list(zip(idx[0],idx[1])))
+        # small_umask = skimage.measure.block_reduce(umask, (8, 8), np.min)
+        # if not np.any(small_umask):
+        #     y1, x1, y2, x2 = self.extract_bbox(umask)
+        #     locx = (y1 + y2) // 2
+        #     locy = (x1 + x2) // 2
+        # else:
+        #     idx = np.where(small_umask)
+        #     locx, locy = random.choice(list(zip(idx[0], idx[1])))
+        #     locx, locy = locx * 8, locy * 8
             # y1, x1, y2, x2 = self.extract_bbox(umask)
             # locx = (y1 + y2) // 2
             # locy = (x1 + x2) // 2
@@ -152,12 +158,15 @@ class CocoDataset(torch.utils.data.Dataset):
         num_classes = self.config.NUM_CLASSES
 
         mask = masks[:, :, 0]
-        umask = masks[:, :, 0]
+        umask = masks[:, :, 1]
 
         # very small objects. will be ignored now and retrained later
         # should probably keep crowds like oranges etc
         if is_crowd or np.sum(mask) < 50:
             return None, None, None, None, True
+        if np.sum(np.array(umask)) / np.sum(np.array(mask)) < 0.3:
+            umask = mask
+
 
         # umask_obj now denotes where it is the only object present
         # mask_obj is the ground truth annotation
@@ -170,8 +179,6 @@ class CocoDataset(torch.utils.data.Dataset):
         mask_obj = self.resize_image(mask_obj, (672, 672), "L")
         umask_obj = self.resize_image(umask_obj, (672, 672), "L")
 
-        # if np.sum(np.array(umask_obj)) / np.sum(np.array(mask_obj)) < 0.3:
-        #     umask = mask
         # code to crop stuff y1, x1, y2, x2
         bbox = self.extract_bbox(np.array(mask_obj))
         y1, x1, y2, x2 = bbox
@@ -323,26 +330,35 @@ class MultiHGModel(nn.Module):
     def __init__(self):
         super(MultiHGModel, self).__init__()
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
-        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
+        self.vgg2 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
         self.mp0 = MaskProp()
         self.mp1 = MaskProp()
+        self.mp2 = MaskProp()
         self.class_predictor = Classifier()
 
     def forward(self, x):
         im, impulse = x
-        del x
+
         inp = torch.cat([im, impulse], dim=1)
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
-        # F.sigmoid ??
-        gen_impulse = F.sigmoid(F.upsample(m0, scale_factor=4))
-        impulse = impulse[:, :-1, ...]
-        inp = torch.cat([im, impulse, gen_impulse], dim=1)
+
+        impulse = F.sigmoid(F.upsample(m0, scale_factor=4))
+        
+        inp = torch.cat([im, impulse], dim=1)
         class_features, mask_features = self.vgg1(inp)
         m1 = self.mp1([class_features, mask_features])
 
+        impulse = F.sigmoid(F.upsample(m1, scale_factor=4))
+        
+        inp = torch.cat([im, impulse], dim=1)
+        class_features, mask_features = self.vgg2(inp)
+        m2 = self.mp2([class_features, mask_features])
+        
         c = self.class_predictor(class_features)
-        return c, [m0, m1]
+
+        return c, [m1, m2]
 
 
 class SimpleHGModel(nn.Module):
@@ -407,8 +423,8 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
-    loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) #+ mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss1 = bce_class_loss(pred_class, gt_class)
+    loss2 = 0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
@@ -437,7 +453,7 @@ def mask_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     w_full = torch.cuda.FloatTensor(gt_mask.shape[0]).fill_(56 * 56).view(-1, 1, 1, 1)
     # b = b
     # f = f
-    l = (b / w_bbox + w_bbox.mean() * f / w_full)
+    l = (b / w_bbox + 3*f / w_full)
     # l = (b+f)/w_bbox
     # print(b.mean().item(),f.mean().item(),l.mean().item())
     l *= mask_weights
