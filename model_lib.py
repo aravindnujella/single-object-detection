@@ -121,34 +121,15 @@ class CocoDataset(torch.utils.data.Dataset):
         w, h = umask.shape
         small_umask = ndimage.convolve(umask, np.ones((16,16)), mode='constant', cval=0.0)
         idx = np.where(small_umask==np.max(small_umask))
-        locx,locy = random.choice(list(zip(idx[0],idx[1])))
-        # small_umask = skimage.measure.block_reduce(umask, (8, 8), np.min)
-        # if not np.any(small_umask):
-        #     y1, x1, y2, x2 = self.extract_bbox(umask)
-        #     locx = (y1 + y2) // 2
-        #     locy = (x1 + x2) // 2
-        # else:
-        #     idx = np.where(small_umask)
-        #     locx, locy = random.choice(list(zip(idx[0], idx[1])))
-        #     locx, locy = locx * 8, locy * 8
-            # y1, x1, y2, x2 = self.extract_bbox(umask)
-            # locx = (y1 + y2) // 2
-            # locy = (x1 + x2) // 2
-        # dimensions of impulse
-        l = 8
-        n = 4
         impulse = np.zeros((4,) + umask.shape)
-        # y1, x1, y2, x2 = self.extract_bbox(umask)
-        # impulse = np.zeros((3 * n - 2,) + umask.shape)
-        for i in range(4):
-            L = (l // 2) * (3**i)
-            impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
-        # impulse[0][y1:y2,x1:x2] = 1
-        # for i in range(n - 1):
-        #     L = (3**i) * l
-        # #     impulse[3 * i + 1][max(locx - L // 2, 0):min(locx + L // 2, w), max(locy - L, 0):min(locy + L, h)] = 1
-        # #     impulse[3 * i + 2][max(locx - L, 0):min(locx + L, w), max(locy - L // 2, 0):min(locy + L // 2, h)] = 1
-        #     # impulse[3 * i + 3][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
+        for i in range(3):
+            locx,locy = random.choice(list(zip(idx[0],idx[1])))
+            # dimensions of impulse
+            l = 8
+            n = 4
+            for i in range(4):
+                L = (l // 2) * (3**i)
+                impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
         return impulse
     # unscaled image, masks
 
@@ -162,7 +143,7 @@ class CocoDataset(torch.utils.data.Dataset):
 
         # very small objects. will be ignored now and retrained later
         # should probably keep crowds like oranges etc
-        if is_crowd or np.sum(mask) < 50:
+        if is_crowd or np.sum(mask) < 900:
             return None, None, None, None, True
         if np.sum(np.array(umask)) / np.sum(np.array(mask)) < 0.3:
             umask = mask
@@ -193,7 +174,7 @@ class CocoDataset(torch.utils.data.Dataset):
         else:
             image_obj, umask_obj, mask_obj = self.random_crop(image_obj, umask_obj, mask_obj, b, bbox)
 
-        if np.sum(np.array(umask_obj)) < 20:
+        if np.sum(np.array(umask_obj)) < 900:
             return None, None, None, None, True
         impulse = self.random_impulse(umask_obj)
         # impulse[-1] = np.array(mask_obj)
@@ -259,16 +240,16 @@ class MaskProp(nn.Module):
             nn.Conv2d(640 + 640, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(256 + 640, 128, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
+            nn.Conv2d(256 + 640, 128, (5, 5), padding=(2, 2)), nn.BatchNorm2d(128), self.relu,
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(128 + 320, 64, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
+            nn.Conv2d(128 + 320, 64, (7, 7), padding=(3, 3)), nn.BatchNorm2d(64), self.relu,
             nn.Conv2d(64, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
         )
         self.mask_layer3 = nn.Sequential(
             nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), 
-            # self.relu,
-            # nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
+            self.relu,
+            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
             # self.relu,
         )
         if init_weights:
@@ -291,7 +272,7 @@ class MaskProp(nn.Module):
         y = self.upsample(y)
 
         y = self.layer3(torch.cat([y, l3], 1))
-        y = torch.max(self.mask_layer3(y),1).unsqueeze(1)
+        y = self.mask_layer3(y)
         return y
 
 
@@ -425,7 +406,7 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = 0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
@@ -454,7 +435,7 @@ def mask_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     w_full = torch.cuda.FloatTensor(gt_mask.shape[0]).fill_(56 * 56).view(-1, 1, 1, 1)
     # b = b
     # f = f
-    l = (b / w_bbox + 3*f / w_full)
+    l = (b / w_bbox + f / w_full)
     # l = (b+f)/w_bbox
     # print(b.mean().item(),f.mean().item(),l.mean().item())
     l *= mask_weights
