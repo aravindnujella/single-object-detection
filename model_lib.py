@@ -128,7 +128,7 @@ class CocoDataset(torch.utils.data.Dataset):
             l = 8
             n = 4
             for i in range(4):
-                L = (l // 2) * (3**i)
+                L = (l // 2)
                 impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
         return impulse
     # unscaled image, masks
@@ -406,7 +406,7 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss2 = 0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
