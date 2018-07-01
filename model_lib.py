@@ -256,18 +256,19 @@ class MaskProp(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.upsample = nn.Upsample(scale_factor=2)
         self.layer5 = nn.Sequential(
-            nn.Conv2d(516 + 128, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
+            nn.Conv2d(640 + 640, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(256 + 128, 256, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
+            nn.Conv2d(256 + 640, 128, (5, 5), padding=(2, 2)), nn.BatchNorm2d(256), self.relu,
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(256 + 64, 128, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
-            nn.Conv2d(128, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
+            nn.Conv2d(128 + 320, 64, (7, 7), padding=(3, 3)), nn.BatchNorm2d(128), self.relu,
+            nn.Conv2d(64, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
         )
         self.mask_layer3 = nn.Sequential(
-            nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), self.relu,
-            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
+            nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), 
+            # self.relu,
+            # nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
             # self.relu,
         )
         if init_weights:
@@ -290,7 +291,7 @@ class MaskProp(nn.Module):
         y = self.upsample(y)
 
         y = self.layer3(torch.cat([y, l3], 1))
-        y = self.mask_layer3(y)
+        y = torch.max(self.mask_layer3(y),1).unsqueeze(1)
         return y
 
 
@@ -301,8 +302,8 @@ class Classifier(nn.Module):
 
     def __init__(self, init_weights=True):
         super(Classifier, self).__init__()
-        self.conv1 = nn.Conv2d(516, 512, (3, 3), padding=(1, 1))
-        self.conv2 = nn.Conv2d(512, 512, (3, 3), padding=(1, 1))
+        self.conv1 = nn.Conv2d(640, 512, (3, 3), padding=(1, 1))
+        # self.conv2 = nn.Conv2d(512, 512, (3, 3), padding=(1, 1))
         self.gap = nn.AvgPool2d((7, 7), stride=1)
         self.fc = nn.Linear(512, 81)
         self.relu = nn.ReLU(inplace=True)
@@ -312,8 +313,8 @@ class Classifier(nn.Module):
     def forward(self, x):
         x = self.conv1(x)
         x = self.relu(x)
-        x = self.conv2(x)
-        x = self.relu(x)
+        # x = self.conv2(x)
+        # x = self.relu(x)
         x = self.gap(x)
         x = self.relu(x)
         x = x.view(x.size(0), -1)
@@ -358,7 +359,7 @@ class MultiHGModel(nn.Module):
         
         c = self.class_predictor(class_features)
 
-        return c, [m0, m1]
+        return c, [m1, m2]
 
 
 class SimpleHGModel(nn.Module):
@@ -423,8 +424,8 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
-    loss1 = bce_class_loss(pred_class, gt_class)
-    loss2 = mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) #+ mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss1 = ce_class_loss(pred_class, gt_class)
+    loss2 = 0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
