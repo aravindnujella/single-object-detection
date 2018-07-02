@@ -119,7 +119,7 @@ class CocoDataset(torch.utils.data.Dataset):
     def random_impulse(self, umask_obj):
         umask = np.array(umask_obj)
         w, h = umask.shape
-        small_umask = ndimage.convolve(umask, np.ones((16,16)), mode='constant', cval=0.0)
+        small_umask = ndimage.convolve(umask, np.ones((6,6)), mode='constant', cval=0.0)
         idx = np.where(small_umask==np.max(small_umask))
         impulse = np.zeros((4,) + umask.shape)
         for i in range(3):
@@ -128,7 +128,7 @@ class CocoDataset(torch.utils.data.Dataset):
             l = 8
             n = 4
             for i in range(4):
-                L = (l // 2)
+                L = (l // 2)*(2**i)
                 impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
         return impulse
     # unscaled image, masks
@@ -491,21 +491,25 @@ def class_acc(pred_class, batch_one_hot):
         labels = batch_one_hot.nonzero()[:, 1]
         maxs, indices = torch.topk(pred_class, 5, -1)
         # print(labels,indices[:,0])
-        return (indices[:, 0] == labels).sum() / batch_one_hot.shape[0]
-
+        # return (indices[:, 0] == labels).sum() / batch_one_hot.shape[0]
+        return (indices[:,0]==labels).float().mean()
 
 def mask_acc(pred_masks, batch_gt_responses):
     with torch.no_grad():
-        target = F.max_pool2d(batch_gt_responses, (4, 4), stride=4)
+        target = F.max_pool2d(batch_gt_responses, (4, 4), stride=4).float()
         pred_masks = F.sigmoid(pred_masks)
         pred_masks = F.threshold(pred_masks, 0.5, 0)
         pred_masks = (pred_masks > 0).float()
-        # pred_masks = (pred_masks == 1)
+        # print(pred_masks)
+        # print(target)
         union = (pred_masks + target) > 0
-        union = union.sum(-1).sum(-1)
+        union = union.sum(-1).sum(-1).float()
+        # print(union)
         intersection = (pred_masks * target) > 0
-        intersection = intersection.sum(-1).sum(-1)
+        intersection = intersection.sum(-1).sum(-1).float()
+        # print(intersection)
         iou = intersection / union
+        # print(iou)
         iou = iou.sum()
         return (iou) / target.shape[0]
 # TODO: modify dummy stub to train code or inference code
