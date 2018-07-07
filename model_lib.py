@@ -83,8 +83,8 @@ class CocoDataset(torch.utils.data.Dataset):
             image[:,:,1] = np.where(impulse[0]==255,255,image[:,:,1])
             image[:,:,2] = np.where(impulse[0]==255,255,image[:,:,2])
             Image.fromarray(image.astype(np.uint8), "RGB").show()
-            # for i in range(impulse.shape[0]):
-            #     Image.fromarray(impulse[0].astype(np.uint8), "L").show()
+            for i in range(impulse.shape[0]):
+                Image.fromarray(impulse[-1].astype(np.uint8), "L").show()
             Image.fromarray(response.astype(np.uint8), "L").show()
             Image.fromarray(bbox.astype(np.uint8), "L").show()
             print(self.config.CLASS_NAMES[np.argmax(one_hot)])
@@ -119,18 +119,29 @@ class CocoDataset(torch.utils.data.Dataset):
     def random_impulse(self, umask_obj):
         umask = np.array(umask_obj)
         w, h = umask.shape
-        small_umask = ndimage.convolve(umask, np.ones((6,6)), mode='constant', cval=0.0)
+        small_umask = ndimage.convolve(umask, np.ones((8,8)), mode='constant', cval=0.0)
         idx = np.where(small_umask==np.max(small_umask))
         impulse = np.zeros((4,) + umask.shape)
-        for i in range(3):
-            locx,locy = random.choice(list(zip(idx[0],idx[1])))
-            # dimensions of impulse
-            l = 8
-            n = 4
-            for i in range(4):
-                L = (l // 2)*(2**i)
-                impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
+        locx,locy = random.choice(list(zip(idx[0],idx[1])))
+        # dimensions of impulse
+        l = 16
+        n = 4
+        for i in range(4):
+            L = (l // 2)*(2**i)
+            impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
+        # impulse[0] = self.perturbed_bbox(umask)
         return impulse
+    def perturbed_bbox(self,umask):
+        y1,x1,y2,x2 = self.extract_bbox(umask)
+        cx = (x1+x2)//2
+        cy = (y1+y2)//2
+        # skew = random.uniform(0.7,0.9)
+        skew = 1
+        lx = int((x2-x1)*skew)//2
+        ly = int((y2-y1)*skew)//2
+        bbox_impulse = np.zeros_like(umask)
+        bbox_impulse[cy-ly:cy+ly,cx-lx:cx+lx] = 1
+        return bbox_impulse
     # unscaled image, masks
 
     def generate_targets(self, image, masks, class_id, is_crowd):
@@ -174,8 +185,8 @@ class CocoDataset(torch.utils.data.Dataset):
         else:
             image_obj, umask_obj, mask_obj = self.random_crop(image_obj, umask_obj, mask_obj, b, bbox)
 
-        if np.sum(np.array(umask_obj)) < 900:
-            return None, None, None, None, True
+        # if np.sum(np.array(umask_obj)) < 40:
+        #     return None, None, None, None, True
         impulse = self.random_impulse(umask_obj)
         # impulse[-1] = np.array(mask_obj)
         gt_response = mask_obj
@@ -313,10 +324,10 @@ class MultiHGModel(nn.Module):
         super(MultiHGModel, self).__init__()
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
         self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
-        self.vgg2 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
+        # self.vgg2 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
         self.mp0 = MaskProp()
         self.mp1 = MaskProp()
-        self.mp2 = MaskProp()
+        # self.mp2 = MaskProp()
         self.class_predictor = Classifier()
 
     def forward(self, x):
@@ -332,15 +343,15 @@ class MultiHGModel(nn.Module):
         class_features, mask_features = self.vgg1(inp)
         m1 = self.mp1([class_features, mask_features])
 
-        impulse = F.sigmoid(F.upsample(m1, scale_factor=4))
+        # impulse = F.sigmoid(F.upsample(m1, scale_factor=4))
         
-        inp = torch.cat([im, impulse], dim=1)
-        class_features, mask_features = self.vgg2(inp)
-        m2 = self.mp2([class_features, mask_features])
+        # inp = torch.cat([im, impulse], dim=1)
+        # class_features, mask_features = self.vgg2(inp)
+        # m2 = self.mp2([class_features, mask_features])
         
         c = self.class_predictor(class_features)
 
-        return c, [m1, m2]
+        return c, [m0, m0]
 
 
 class SimpleHGModel(nn.Module):
@@ -405,8 +416,8 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
-    loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = 0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4) + mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)
+    loss1 = bce_class_loss(pred_class, gt_class)
+    loss2 = soft_iou_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
@@ -441,7 +452,15 @@ def mask_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     l *= mask_weights
     # print(mask_weights.squeeze())
     return l.sum(-1).sum(-1).mean()
-
+def soft_iou_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
+    target = F.max_pool2d(gt_mask, (scale_down, scale_down), stride=scale_down)
+    bbox = F.max_pool2d(bbox, (scale_down, scale_down), stride=scale_down)
+    pred_masks = F.sigmoid(pred_masks)
+    i = (pred_masks*target).sum(-1).sum(-1)
+    u = (pred_masks+target-pred_masks*target).sum(-1).sum(-1)
+    l = 1-i/u
+    # print(i,u,l)
+    return l.mean()
 # def mask_loss(pred_masks, gt_mask, mask_weights, scale_down):
 #     target = F.max_pool2d(gt_mask, (scale_down, scale_down), stride=scale_down)
 #     fg_size = gt_mask.squeeze().sum(-1).sum(-1).view(-1, 1, 1, 1) / (scale_down**2)
@@ -483,7 +502,10 @@ def mml_class_loss(pred_class, gt_class):
 
 
 def accuracy(pred_class, batch_one_hot, pred_masks, batch_gt_responses):
-    return class_acc(pred_class, batch_one_hot), mask_acc(pred_masks, batch_gt_responses)
+    idx = batch_one_hot[..., 0].nonzero()
+    mask_weights = torch.cuda.FloatTensor(batch_one_hot.shape[0]).fill_(1)
+    mask_weights[idx] = 0
+    return class_acc(pred_class, batch_one_hot), mask_acc(pred_masks, batch_gt_responses, mask_weights)
 
 
 def class_acc(pred_class, batch_one_hot):
@@ -494,7 +516,7 @@ def class_acc(pred_class, batch_one_hot):
         # return (indices[:, 0] == labels).sum() / batch_one_hot.shape[0]
         return (indices[:,0]==labels).float().mean()
 
-def mask_acc(pred_masks, batch_gt_responses):
+def mask_acc(pred_masks, batch_gt_responses,mask_weights):
     with torch.no_grad():
         target = F.max_pool2d(batch_gt_responses, (4, 4), stride=4).float()
         pred_masks = F.sigmoid(pred_masks)
@@ -508,10 +530,11 @@ def mask_acc(pred_masks, batch_gt_responses):
         intersection = (pred_masks * target) > 0
         intersection = intersection.sum(-1).sum(-1).float()
         # print(intersection)
-        iou = intersection / union
-        # print(iou)
+        iou = (intersection / union).squeeze()
+        # print(iou.shape,mask_weights.shape)
+        iou *= mask_weights
         iou = iou.sum()
-        return (iou) / target.shape[0]
+        return iou / mask_weights.sum()
 # TODO: modify dummy stub to train code or inference code
 
 
