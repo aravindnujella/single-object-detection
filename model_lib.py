@@ -312,11 +312,6 @@ class Classifier(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
-# def expand_impulse(base_impulse):
-#     idx = base_impulse.nonzero()
-#     i1,j1,i2,j2 = idx[:,0].min(),idx[:,1].min(),idx[:,0].max(),idx[:,1].max()
-#     l1,l2,l3 = torch.cuda.FloatTensor(base_impulse.shape).fill_(0)
-
 
 class MultiHGModel(nn.Module):
 
@@ -324,10 +319,8 @@ class MultiHGModel(nn.Module):
         super(MultiHGModel, self).__init__()
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
         self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
-        # self.vgg2 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
         self.mp0 = MaskProp()
         self.mp1 = MaskProp()
-        # self.mp2 = MaskProp()
         self.class_predictor = Classifier()
 
     def forward(self, x):
@@ -342,16 +335,10 @@ class MultiHGModel(nn.Module):
         inp = torch.cat([im, impulse], dim=1)
         class_features, mask_features = self.vgg1(inp)
         m1 = self.mp1([class_features, mask_features])
-
-        # impulse = F.sigmoid(F.upsample(m1, scale_factor=4))
-        
-        # inp = torch.cat([im, impulse], dim=1)
-        # class_features, mask_features = self.vgg2(inp)
-        # m2 = self.mp2([class_features, mask_features])
         
         c = self.class_predictor(class_features)
 
-        return c, [m0, m0]
+        return c, [m0, m1]
 
 
 class SimpleHGModel(nn.Module):
@@ -417,7 +404,7 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = bce_class_loss(pred_class, gt_class)
-    loss2 = soft_iou_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4)
+    loss2 = soft_iou_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)+soft_iou_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
@@ -459,7 +446,8 @@ def soft_iou_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     i = (pred_masks*target).sum(-1).sum(-1)
     u = (pred_masks+target-pred_masks*target).sum(-1).sum(-1)
     l = 1-i/u
-    # print(i,u,l)
+    # print(l.shape,mask_weights.shape)
+    l *= mask_weights.view(-1,1)
     return l.mean()
 # def mask_loss(pred_masks, gt_mask, mask_weights, scale_down):
 #     target = F.max_pool2d(gt_mask, (scale_down, scale_down), stride=scale_down)
