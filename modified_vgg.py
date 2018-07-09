@@ -268,8 +268,8 @@ class split_vgg16_features(nn.Module):
 
     def forward(self, x):
         outs = []
-        x = self.layer1(x); x = self.pool(x);
-        x = self.layer2(x); x = self.pool(x);
+        x = self.layer1(x); outs.append(x); x = self.pool(x);
+        x = self.layer2(x); outs.append(x); x = self.pool(x);
         x = self.layer3(x); outs.append(x); x = self.pool(x);
         x = self.layer4(x); outs.append(x); x = self.pool(x);
         x = self.layer5(x); outs.append(x); x = self.pool(x);
@@ -333,8 +333,9 @@ class split_vgg16_features(nn.Module):
                         print(gc.copy_filters.weight.shape,gc.copy_filters.bias.shape,copy_bias[l][k].shape)
                         print(gc.ignore_filters.weight.shape,gc.ignore_filters.bias.shape,ignore_bias[l][k].shape)
                         gc.copy_filters.weight = nn.Parameter(new_copy[l][k])
-                        # nn.init.xavier_uniform_(gc.copy_filters.weight)
                         gc.ignore_filters.weight = nn.Parameter(new_ignore[l][k])
+                        # nn.init.xavier_uniform_(gc.copy_filters.weight)
+                        # nn.init.xavier_uniform_(gc.ignore_filters.weight)
                         gc.copy_filters.bias = nn.Parameter(copy_bias[l][k])
                         gc.ignore_filters.bias = nn.Parameter(ignore_bias[l][k])
                         k += 1

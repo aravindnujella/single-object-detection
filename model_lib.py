@@ -124,7 +124,7 @@ class CocoDataset(torch.utils.data.Dataset):
         impulse = np.zeros((4,) + umask.shape)
         locx,locy = random.choice(list(zip(idx[0],idx[1])))
         # dimensions of impulse
-        l = 16
+        l = 8
         n = 4
         for i in range(4):
             L = (l // 2)*(2**i)
@@ -274,7 +274,7 @@ class MaskProp(nn.Module):
         c, m = x
         # masks = []
         c = F.upsample(c, scale_factor=2)
-        l3, l4, l5 = m
+        l1, l2, l3, l4, l5 = m
 
         y = self.layer5(torch.cat([c, l5], 1))
         y = self.upsample(y)
@@ -282,8 +282,15 @@ class MaskProp(nn.Module):
         y = self.layer4(torch.cat([y, l4], 1))
         y = self.upsample(y)
 
-        y = self.layer3(torch.cat([y, l3], 1))
-        y = self.mask_layer3(y)
+        y = self.layer3(torch.cat([y, l4], 1))
+        y = self.upsample(y)
+
+        y = self.layer2(torch.cat([y, l4], 1))
+        y = self.upsample(y)
+
+        y = self.layer1(torch.cat([y, l4], 1))
+        y = self.upsample(y)
+
         return y
 
 
@@ -403,8 +410,8 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights = torch.cuda.FloatTensor(gt_class.shape[0]).fill_(1)
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
-    loss1 = bce_class_loss(pred_class, gt_class)
-    loss2 = soft_iou_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)+soft_iou_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4)
+    loss1 = ce_class_loss(pred_class, gt_class)
+    loss2 = soft_iou_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)+0.2*soft_iou_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4)
     return loss1, loss2
 
 
