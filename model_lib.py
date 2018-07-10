@@ -248,21 +248,26 @@ class MaskProp(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.upsample = nn.Upsample(scale_factor=2)
         self.layer5 = nn.Sequential(
-            nn.Conv2d(640 + 640, 256, (3, 3), padding=(1, 1)), nn.BatchNorm2d(256), self.relu,
+            nn.Conv2d(640 + 640, 640, (3, 3), padding=(1, 1)), nn.BatchNorm2d(640), 
+            self.relu,
         )
         self.layer4 = nn.Sequential(
-            nn.Conv2d(256 + 640, 128, (5, 5), padding=(2, 2)), nn.BatchNorm2d(128), self.relu,
+            nn.Conv2d(640 + 640, 320, (5, 5), padding=(2, 2)), nn.BatchNorm2d(320), 
+            self.relu,
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(128 + 320, 64, (7, 7), padding=(3, 3)), nn.BatchNorm2d(64), self.relu,
-            nn.Conv2d(64, 32, (7, 7), padding=(3, 3)), nn.BatchNorm2d(32), self.relu,
-        )
-        self.mask_layer3 = nn.Sequential(
-            nn.Conv2d(32, 10, (9, 9), padding=(4, 4)), nn.BatchNorm2d(10), 
+            nn.Conv2d(320 + 320, 160, (7, 7), padding=(3, 3)), nn.BatchNorm2d(160), 
             self.relu,
-            nn.Conv2d(10, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
+        )
+        self.layer2 = nn.Sequential(
+            nn.Conv2d(160 + 160, 80, (9, 9), padding=(4, 4)), nn.BatchNorm2d(80), 
+            self.relu,
+        )
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(80 + 80, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
             # self.relu,
         )
+
         if init_weights:
             for name, child in self.named_children():
                 if name[:-1] == 'layer' or 'mask_layer':
@@ -272,24 +277,22 @@ class MaskProp(nn.Module):
 
     def forward(self, x):
         c, m = x
-        # masks = []
-        c = F.upsample(c, scale_factor=2)
         l1, l2, l3, l4, l5 = m
 
+        c = F.upsample(c, scale_factor=2)
         y = self.layer5(torch.cat([c, l5], 1))
-        y = self.upsample(y)
 
+        y = self.upsample(y)
         y = self.layer4(torch.cat([y, l4], 1))
-        y = self.upsample(y)
 
-        y = self.layer3(torch.cat([y, l4], 1))
         y = self.upsample(y)
+        y = self.layer3(torch.cat([y, l3], 1))
 
-        y = self.layer2(torch.cat([y, l4], 1))
         y = self.upsample(y)
+        y = self.layer2(torch.cat([y, l2], 1))
 
-        y = self.layer1(torch.cat([y, l4], 1))
         y = self.upsample(y)
+        y = self.layer1(torch.cat([y, l1], 1))
 
         return y
 
@@ -325,9 +328,9 @@ class MultiHGModel(nn.Module):
     def __init__(self):
         super(MultiHGModel, self).__init__()
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
-        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
+        # self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
         self.mp0 = MaskProp()
-        self.mp1 = MaskProp()
+        # self.mp1 = MaskProp()
         self.class_predictor = Classifier()
 
     def forward(self, x):
@@ -337,15 +340,15 @@ class MultiHGModel(nn.Module):
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
 
-        impulse = F.sigmoid(F.upsample(m0, scale_factor=4))
+        # impulse = F.sigmoid(m0)
         
-        inp = torch.cat([im, impulse], dim=1)
-        class_features, mask_features = self.vgg1(inp)
-        m1 = self.mp1([class_features, mask_features])
+        # inp = torch.cat([im, impulse], dim=1)
+        # class_features, mask_features = self.vgg1(inp)
+        # m1 = self.mp1([class_features, mask_features])
         
         c = self.class_predictor(class_features)
 
-        return c, [m0, m1]
+        return c, [m0, m0]
 
 
 class SimpleHGModel(nn.Module):
@@ -411,7 +414,7 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = soft_iou_loss(pred_masks[1], gt_mask, mask_weights, bbox, 4)+0.2*soft_iou_loss(pred_masks[0], gt_mask, mask_weights, bbox, 4)
+    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1)
     return loss1, loss2
 
 
@@ -512,8 +515,9 @@ def class_acc(pred_class, batch_one_hot):
         return (indices[:,0]==labels).float().mean()
 
 def mask_acc(pred_masks, batch_gt_responses,mask_weights):
+    stride = 1
     with torch.no_grad():
-        target = F.max_pool2d(batch_gt_responses, (4, 4), stride=4).float()
+        target = F.max_pool2d(batch_gt_responses, (stride, stride), stride=stride).float()
         pred_masks = F.sigmoid(pred_masks)
         pred_masks = F.threshold(pred_masks, 0.5, 0)
         pred_masks = (pred_masks > 0).float()
