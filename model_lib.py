@@ -167,9 +167,9 @@ class CocoDataset(torch.utils.data.Dataset):
         mask_obj = Image.fromarray(mask, "L")
         umask_obj = Image.fromarray(umask, "L")
 
-        image_obj = self.resize_image(image_obj, (672, 672), "RGB")
-        mask_obj = self.resize_image(mask_obj, (672, 672), "L")
-        umask_obj = self.resize_image(umask_obj, (672, 672), "L")
+        image_obj = self.resize_image(image_obj, (448, 448), "RGB")
+        mask_obj = self.resize_image(mask_obj, (448, 448), "L")
+        umask_obj = self.resize_image(umask_obj, (448, 448), "L")
 
         # code to crop stuff y1, x1, y2, x2
         bbox = self.extract_bbox(np.array(mask_obj))
@@ -201,7 +201,7 @@ class CocoDataset(torch.utils.data.Dataset):
     def resize_image(self, image_obj, thumbnail_shape, mode):
         z = Image.new(mode, thumbnail_shape, "black")
         if mode == 'RGB':
-            image_obj.thumbnail(thumbnail_shape, Image.ANTIALIAS)
+            image_obj.thumbnail(thumbnail_shape, Image.BICUBIC)
         else:
             image_obj.thumbnail(thumbnail_shape, Image.NEAREST)
         (w, h) = image_obj.size
@@ -348,7 +348,7 @@ class MultiHGModel(nn.Module):
         
         c = self.class_predictor(class_features)
 
-        return c, [m0, m0]
+        return c, [0, m0]
 
 
 class SimpleHGModel(nn.Module):
@@ -414,7 +414,7 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1)
+    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)#+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1)
     return loss1, loss2
 
 
