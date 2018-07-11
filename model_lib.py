@@ -328,9 +328,9 @@ class MultiHGModel(nn.Module):
     def __init__(self):
         super(MultiHGModel, self).__init__()
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
-        # self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
+        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
         self.mp0 = MaskProp()
-        # self.mp1 = MaskProp()
+        self.mp1 = MaskProp()
         self.class_predictor = Classifier()
 
     def forward(self, x):
@@ -340,15 +340,15 @@ class MultiHGModel(nn.Module):
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
 
-        # impulse = F.sigmoid(m0)
+        impulse[:,-1,:,:] = F.threshold(F.sigmoid(m0.squeeze()),0.5,0)
         
-        # inp = torch.cat([im, impulse], dim=1)
-        # class_features, mask_features = self.vgg1(inp)
-        # m1 = self.mp1([class_features, mask_features])
+        inp = torch.cat([im, impulse], dim=1)
+        class_features, mask_features = self.vgg1(inp)
+        m1 = self.mp1([class_features, mask_features])
         
         c = self.class_predictor(class_features)
 
-        return c, [0, m0]
+        return c, [m0,m1]
 
 
 class SimpleHGModel(nn.Module):
@@ -414,8 +414,10 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)#+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1)
-    return loss1, loss2
+    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1) 
+    reg = soft_iou_reg(pred_masks[0],pred_masks[1],mask_weights,gt_mask,1)
+
+    return loss1, loss2+reg
 
 
 # gt_mask: N,1,w,h
@@ -456,6 +458,20 @@ def soft_iou_loss(pred_masks, gt_mask, mask_weights, bbox, scale_down):
     i = (pred_masks*target).sum(-1).sum(-1)
     u = (pred_masks+target-pred_masks*target).sum(-1).sum(-1)
     l = 1-i/u
+    # print(l.shape,mask_weights.shape)
+    l *= mask_weights.view(-1,1)
+    return l.mean()
+def soft_iou_reg(m0, m1, mask_weights, gt_mask, scale_down):
+    target = F.max_pool2d(gt_mask, (scale_down, scale_down), stride=scale_down)
+    m0 = F.sigmoid(m0)
+    m1 = F.sigmoid(m1)
+    pi = (m0*m1).sum(-1).sum(-1)
+    pu = (m0+m1-m0*m1).sum(-1).sum(-1)
+    gi = (m0*target).sum(-1).sum(-1)
+    gu = (m0+target-m0*target).sum(-1).sum(-1)
+    # l = (gi/gu)/(pi/pu) 
+    # l = (gi*pu)/(pi*gu) 
+    l = (pi/pu)*(1-gi/gu)
     # print(l.shape,mask_weights.shape)
     l *= mask_weights.view(-1,1)
     return l.mean()
