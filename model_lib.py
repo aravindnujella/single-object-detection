@@ -83,8 +83,8 @@ class CocoDataset(torch.utils.data.Dataset):
             image[:,:,1] = np.where(impulse[0]==255,255,image[:,:,1])
             image[:,:,2] = np.where(impulse[0]==255,255,image[:,:,2])
             Image.fromarray(image.astype(np.uint8), "RGB").show()
-            for i in range(impulse.shape[0]):
-                Image.fromarray(impulse[-1].astype(np.uint8), "L").show()
+            # for i in range(impulse.shape[0]):
+            #     Image.fromarray(impulse[-1].astype(np.uint8), "L").show()
             Image.fromarray(response.astype(np.uint8), "L").show()
             Image.fromarray(bbox.astype(np.uint8), "L").show()
             print(self.config.CLASS_NAMES[np.argmax(one_hot)])
@@ -119,7 +119,7 @@ class CocoDataset(torch.utils.data.Dataset):
     def random_impulse(self, umask_obj):
         umask = np.array(umask_obj)
         w, h = umask.shape
-        small_umask = ndimage.convolve(umask, np.ones((8,8)), mode='constant', cval=0.0)
+        small_umask = ndimage.convolve(umask, np.ones((16,16)), mode='constant', cval=0.0)
         idx = np.where(small_umask==np.max(small_umask))
         impulse = np.zeros((4,) + umask.shape)
         locx,locy = random.choice(list(zip(idx[0],idx[1])))
@@ -171,22 +171,20 @@ class CocoDataset(torch.utils.data.Dataset):
         mask_obj = self.resize_image(mask_obj, (448, 448), "L")
         umask_obj = self.resize_image(umask_obj, (448, 448), "L")
 
-        # code to crop stuff y1, x1, y2, x2
-        bbox = self.extract_bbox(np.array(mask_obj))
-        y1, x1, y2, x2 = bbox
-        b = config.CROP_SIZE
+        # # code to crop stuff y1, x1, y2, x2
+        # bbox = self.extract_bbox(np.array(mask_obj))
+        # y1, x1, y2, x2 = bbox
+        # b = config.CROP_SIZE
 
-        # big object
-        if (x2 - x1) > 180 or (y2 - y1) > 180:
-            image_obj = self.resize_image(image_obj, (b, b), "RGB")
-            umask_obj = self.resize_image(umask_obj, (b, b), "L")
-            mask_obj = self.resize_image(mask_obj, (b, b), "L")
-        # small object
-        else:
-            image_obj, umask_obj, mask_obj = self.random_crop(image_obj, umask_obj, mask_obj, b, bbox)
+        # # big object
+        # if (x2 - x1) > 180 or (y2 - y1) > 180:
+        #     image_obj = self.resize_image(image_obj, (b, b), "RGB")
+        #     umask_obj = self.resize_image(umask_obj, (b, b), "L")
+        #     mask_obj = self.resize_image(mask_obj, (b, b), "L")
+        # # small object
+        # else:
+        #     image_obj, umask_obj, mask_obj = self.random_crop(image_obj, umask_obj, mask_obj, b, bbox)
 
-        # if np.sum(np.array(umask_obj)) < 40:
-        #     return None, None, None, None, True
         impulse = self.random_impulse(umask_obj)
         # impulse[-1] = np.array(mask_obj)
         gt_response = mask_obj
@@ -264,9 +262,11 @@ class MaskProp(nn.Module):
             self.relu,
         )
         self.layer1 = nn.Sequential(
-            nn.Conv2d(80 + 80, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
+            nn.Conv2d(80 + 80, 80, (9, 9), padding=(4, 4)), nn.BatchNorm2d(80), 
             # self.relu,
         )
+        # point wise max pool
+        self.pmp = nn.MaxPool3d((80,1,1),stride=1)
 
         if init_weights:
             for name, child in self.named_children():
@@ -294,6 +294,11 @@ class MaskProp(nn.Module):
         y = self.upsample(y)
         y = self.layer1(torch.cat([y, l1], 1))
 
+        # unsqueeze and max pool over the channels
+        y = torch.unsqueeze(y,1)
+        y = self.pmp(y)
+        y = torch.squeeze(y).unsqueeze(1)
+
         return y
 
 
@@ -306,7 +311,8 @@ class Classifier(nn.Module):
         super(Classifier, self).__init__()
         self.conv1 = nn.Conv2d(640, 512, (3, 3), padding=(1, 1))
         # self.conv2 = nn.Conv2d(512, 512, (3, 3), padding=(1, 1))
-        self.gap = nn.AvgPool2d((7, 7), stride=1)
+        # self.gap = nn.AvgPool2d((14, 14), stride=1)
+        self.gap = nn.MaxPool2d((14, 14), stride=1)
         self.fc = nn.Linear(512, 81)
         self.relu = nn.ReLU(inplace=True)
         if init_weights:
