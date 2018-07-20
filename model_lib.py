@@ -262,11 +262,11 @@ class MaskProp(nn.Module):
             self.relu,
         )
         self.layer1 = nn.Sequential(
-            nn.Conv2d(80 + 80, 80, (9, 9), padding=(4, 4)), nn.BatchNorm2d(80), 
+            nn.Conv2d(80 + 80, 1, (9, 9), padding=(4, 4)), nn.BatchNorm2d(1), 
             # self.relu,
         )
         # point wise max pool
-        self.pmp = nn.MaxPool3d((80,1,1),stride=1)
+        # self.pmp = nn.MaxPool3d((80,1,1),stride=1)
 
         if init_weights:
             for name, child in self.named_children():
@@ -295,9 +295,9 @@ class MaskProp(nn.Module):
         y = self.layer1(torch.cat([y, l1], 1))
 
         # unsqueeze and max pool over the channels
-        y = torch.unsqueeze(y,1)
-        y = self.pmp(y)
-        y = torch.squeeze(y).unsqueeze(1)
+        # y = torch.unsqueeze(y,1)
+        # y = self.pmp(y)
+        # y = torch.squeeze(y).unsqueeze(1)
 
         return y
 
@@ -334,9 +334,9 @@ class MultiHGModel(nn.Module):
     def __init__(self):
         super(MultiHGModel, self).__init__()
         self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
-        self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        # self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
         self.mp0 = MaskProp()
-        self.mp1 = MaskProp()
+        # self.mp1 = MaskProp()
         self.class_predictor = Classifier()
 
     def forward(self, x):
@@ -346,15 +346,15 @@ class MultiHGModel(nn.Module):
         class_features, mask_features = self.vgg0(inp)
         m0 = self.mp0([class_features, mask_features])
 
-        impulse[:,-1,:,:] = F.threshold(F.sigmoid(m0.squeeze()),0.5,0)
+        # impulse[:,-1,:,:] = F.threshold(F.sigmoid(m0.squeeze()),0.5,0)
         
-        inp = torch.cat([im, impulse], dim=1)
-        class_features, mask_features = self.vgg1(inp)
-        m1 = self.mp1([class_features, mask_features])
+        # inp = torch.cat([im, impulse], dim=1)
+        # class_features, mask_features = self.vgg1(inp)
+        # m1 = self.mp1([class_features, mask_features])
         
         c = self.class_predictor(class_features)
 
-        return c, [m0,m1]
+        return c, [m0,m0]
 
 
 class SimpleHGModel(nn.Module):
@@ -423,7 +423,8 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1) 
     reg = soft_iou_reg(pred_masks[0],pred_masks[1],mask_weights,gt_mask,1)
 
-    return loss1, loss2+reg
+    # return loss1, loss2+reg
+    return loss1,loss2
 
 
 # gt_mask: N,1,w,h
