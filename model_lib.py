@@ -34,6 +34,8 @@ class CocoDataset(torch.utils.data.Dataset):
         self.class_ids = range(config.NUM_CLASSES)
         # class_wise_iterators
         self.sampler = self.weighted_sampler()
+        # self.cid = [item for sublist in cwid for item in sublist]
+        # random.shuffle(self.cid)
     # regardless of instance_index, we give some shit.
     # shouldn't matter anyway because of blah blah
 
@@ -68,6 +70,7 @@ class CocoDataset(torch.utils.data.Dataset):
     def __len__(self):
         return sum(self.cw_num_instances)
 
+
     def visualize_data(self):
         n = len(self)
         for i in range(n):
@@ -79,14 +82,14 @@ class CocoDataset(torch.utils.data.Dataset):
             impulse = impulse * 255
             response = np.squeeze(response) * 255
             bbox = np.squeeze(bbox) * 255
-            image[:,:,0] = np.where(impulse[0],255,image[:,:,0])
-            image[:,:,1] = np.where(impulse[0]==255,255,image[:,:,1])
-            image[:,:,2] = np.where(impulse[0]==255,255,image[:,:,2])
+            image[:,:,0] = np.where(impulse[0]==255,random.choice(range(50,150)),image[:,:,0])
+            # image[:,:,1] = np.where(impulse[0]==255,random.choice(range(50,150)),image[:,:,1])
+            # image[:,:,2] = np.where(impulse[0]==255,random.choice(range(50,150)),image[:,:,2])
             Image.fromarray(image.astype(np.uint8), "RGB").show()
             # for i in range(impulse.shape[0]):
             #     Image.fromarray(impulse[-1].astype(np.uint8), "L").show()
-            Image.fromarray(response.astype(np.uint8), "L").show()
-            Image.fromarray(bbox.astype(np.uint8), "L").show()
+            # Image.fromarray(response.astype(np.uint8), "L").show()
+            # Image.fromarray(bbox.astype(np.uint8), "L").show()
             print(self.config.CLASS_NAMES[np.argmax(one_hot)])
             input()
 
@@ -119,17 +122,17 @@ class CocoDataset(torch.utils.data.Dataset):
     def random_impulse(self, umask_obj):
         umask = np.array(umask_obj)
         w, h = umask.shape
-        small_umask = ndimage.convolve(umask, np.ones((16,16)), mode='constant', cval=0.0)
+        small_umask = ndimage.convolve(umask, np.ones((32,32)), mode='constant', cval=0.0)
         idx = np.where(small_umask==np.max(small_umask))
-        impulse = np.zeros((4,) + umask.shape)
+        impulse = np.zeros((1,) + umask.shape)
         locx,locy = random.choice(list(zip(idx[0],idx[1])))
         # dimensions of impulse
         l = 8
         n = 4
-        for i in range(4):
-            L = (l // 2)*(2**i)
-            impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
-        # impulse[0] = self.perturbed_bbox(umask)
+        # for i in range(4):
+        #     L = (l // 2)*(2**i)
+        #     impulse[i][max(locx - L, 0):min(locx + L, w), max(locy - L, 0):min(locy + L, h)] = 1
+        impulse[0] = umask
         return impulse
     def perturbed_bbox(self,umask):
         y1,x1,y2,x2 = self.extract_bbox(umask)
@@ -164,13 +167,20 @@ class CocoDataset(torch.utils.data.Dataset):
         # mask_obj is the ground truth annotation
         # using umask_obj we generate impulse
         image_obj = Image.fromarray(image, "RGB")
-        mask_obj = Image.fromarray(mask, "L")
-        umask_obj = Image.fromarray(umask, "L")
+        mask_obj = Image.fromarray(mask*255, "L")
+        umask_obj = Image.fromarray(umask*255, "L")
 
-        image_obj = self.resize_image(image_obj, (448, 448), "RGB")
-        mask_obj = self.resize_image(mask_obj, (448, 448), "L")
-        umask_obj = self.resize_image(umask_obj, (448, 448), "L")
+        image_obj.show()
 
+        # fliplr = (random.random() > 0.5)
+        fliplr = False
+        coeff = self.random_coeff(image_obj.size,0.08,0.12)
+        image_obj = self.resize_image(image_obj, (448, 448), "RGB", coeff, fliplr)
+        mask_obj = self.resize_image(mask_obj, (448, 448), "L", coeff, fliplr)
+        umask_obj = self.resize_image(umask_obj, (448, 448), "L", coeff, fliplr)
+        print(class_id)
+        image_obj.show()
+        mask_obj.show()
         # # code to crop stuff y1, x1, y2, x2
         # bbox = self.extract_bbox(np.array(mask_obj))
         # y1, x1, y2, x2 = bbox
@@ -186,7 +196,7 @@ class CocoDataset(torch.utils.data.Dataset):
         #     image_obj, umask_obj, mask_obj = self.random_crop(image_obj, umask_obj, mask_obj, b, bbox)
 
         impulse = self.random_impulse(umask_obj)
-        # impulse[-1] = np.array(mask_obj)
+        impulse[-1] = np.array(mask_obj)
         gt_response = mask_obj
         one_hot = np.zeros(81)
         one_hot[class_id] = 1
@@ -196,15 +206,17 @@ class CocoDataset(torch.utils.data.Dataset):
         image = Image.open(self.data_dir + image_id).convert("RGB")
         return np.array(image)
 
-    def resize_image(self, image_obj, thumbnail_shape, mode):
-        z = Image.new(mode, thumbnail_shape, "black")
-        if mode == 'RGB':
-            image_obj.thumbnail(thumbnail_shape, Image.BICUBIC)
-        else:
-            image_obj.thumbnail(thumbnail_shape, Image.NEAREST)
-        (w, h) = image_obj.size
-        z.paste(image_obj, ((thumbnail_shape[0] - w) // 2, (thumbnail_shape[1] - h) // 2))
-        return z
+    def resize_image(self, image_obj, thumbnail_shape, mode, coeff, fliplr = False):
+
+        interpolation = {"RGB":Image.BICUBIC,"L":Image.NEAREST}[mode]
+
+        if fliplr == True:
+            image_obj = image_obj.transpose(Image.FLIP_LEFT_RIGHT)
+
+        image_obj = image_obj.transform(thumbnail_shape, Image.PERSPECTIVE, coeff, interpolation)
+
+        # z = Image.new(mode, thumbnail_shape, "black")
+        return image_obj
 
     def load_image_gt(self, class_id, instance_index):
         config = self.config
@@ -221,6 +233,31 @@ class CocoDataset(torch.utils.data.Dataset):
         #     masks = np.fliplr(masks)
 
         return image, masks, is_crowd
+
+
+    def distort_gen(self, min_dis, max_dis):
+        while True:
+            yield random.uniform(min_dis, max_dis)
+
+    def random_coeff(self, size, min_dis, max_dis):
+        width,height = size
+        m = self.distort_gen(min_dis, max_dis)
+        pi = [(0, 0), (width, 0), (0, height), (width, height)]
+        pf = [(0 - next(m) * width, 0 - next(m) * height), (width + next(m) * width, 0 - next(m) * height),
+              (0 - next(m) * width, height + next(m) * height), (width + next(m) * width, height + next(m) * height)]
+ 
+        matrix = []
+        for p1, p2 in zip(pf, pi):
+            matrix.append([p1[0], p1[1], 1, 0, 0, 0, -
+                           p2[0] * p1[0], -p2[0] * p1[1]])
+            matrix.append([0, 0, 0, p1[0], p1[1], 1, -
+                           p2[1] * p1[0], -p2[1] * p1[1]])
+
+        A = np.matrix(matrix, dtype=np.float)
+        B = np.array(pi).reshape(8)
+
+        res = np.linalg.solve(A, B)
+        return np.array(res).reshape(8)
 
 
 def get_loader(cwid, config, data_dir):
@@ -310,21 +347,23 @@ class Classifier(nn.Module):
     def __init__(self, init_weights=True):
         super(Classifier, self).__init__()
         self.conv1 = nn.Conv2d(640, 512, (3, 3), padding=(1, 1))
-        # self.conv2 = nn.Conv2d(512, 512, (3, 3), padding=(1, 1))
-        # self.gap = nn.AvgPool2d((14, 14), stride=1)
-        self.gap = nn.MaxPool2d((14, 14), stride=1)
-        self.fc = nn.Linear(512, 81)
+        self.conv2 = nn.Conv2d(512, 256, (1, 1))
+
+        self.gap = nn.AvgPool2d((14, 14), stride=1)
+        # self.gap = nn.MaxPool2d((14, 14), stride=1)
+        self.fc = nn.Linear(256*14*14, 81)
         self.relu = nn.ReLU(inplace=True)
         if init_weights:
             nn.init.xavier_uniform_(self.conv1.weight)
+            nn.init.xavier_uniform_(self.conv2.weight)
 
     def forward(self, x):
         x = self.conv1(x)
         x = self.relu(x)
-        # x = self.conv2(x)
-        # x = self.relu(x)
-        x = self.gap(x)
+        x = self.conv2(x)
         x = self.relu(x)
+        # x = self.gap(x)
+        # x = self.relu(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
@@ -333,9 +372,9 @@ class MultiHGModel(nn.Module):
 
     def __init__(self):
         super(MultiHGModel, self).__init__()
-        self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
+        self.vgg0 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=1)
         # self.vgg1 = modified_vgg.split_vgg16_features(pre_trained_weights=False, d_in=4)
-        self.mp0 = MaskProp()
+        # self.mp0 = MaskProp()
         # self.mp1 = MaskProp()
         self.class_predictor = Classifier()
 
@@ -344,7 +383,7 @@ class MultiHGModel(nn.Module):
 
         inp = torch.cat([im, impulse], dim=1)
         class_features, mask_features = self.vgg0(inp)
-        m0 = self.mp0([class_features, mask_features])
+        # m0 = self.mp0([class_features, mask_features])
 
         # impulse[:,-1,:,:] = F.threshold(F.sigmoid(m0.squeeze()),0.5,0)
         
@@ -354,7 +393,7 @@ class MultiHGModel(nn.Module):
         
         c = self.class_predictor(class_features)
 
-        return c, [m0,m0]
+        return c, [0,0]
 
 
 class SimpleHGModel(nn.Module):
@@ -420,11 +459,11 @@ def multi_mask_loss_criterion(pred_class, gt_class, pred_masks, gt_mask, bbox):
     mask_weights[idx] = 0
     mask_weights = mask_weights.view(-1, 1, 1, 1)
     loss1 = ce_class_loss(pred_class, gt_class)
-    loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1) 
-    reg = soft_iou_reg(pred_masks[0],pred_masks[1],mask_weights,gt_mask,1)
+    # loss2 = mask_loss(pred_masks[1], gt_mask, mask_weights, bbox, 1)+0.2*mask_loss(pred_masks[0], gt_mask, mask_weights, bbox, 1) 
+    # reg = soft_iou_reg(pred_masks[0],pred_masks[1],mask_weights,gt_mask,1)
 
     # return loss1, loss2+reg
-    return loss1,loss2
+    return loss1, loss1
 
 
 # gt_mask: N,1,w,h
@@ -526,8 +565,9 @@ def accuracy(pred_class, batch_one_hot, pred_masks, batch_gt_responses):
     idx = batch_one_hot[..., 0].nonzero()
     mask_weights = torch.cuda.FloatTensor(batch_one_hot.shape[0]).fill_(1)
     mask_weights[idx] = 0
-    return class_acc(pred_class, batch_one_hot), mask_acc(pred_masks, batch_gt_responses, mask_weights)
-
+    class_score = class_acc(pred_class, batch_one_hot)
+    # mask_score = mask_acc(pred_masks, batch_gt_responses, mask_weights)
+    return class_score, class_score
 
 def class_acc(pred_class, batch_one_hot):
     with torch.no_grad():
