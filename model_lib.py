@@ -167,20 +167,18 @@ class CocoDataset(torch.utils.data.Dataset):
         # mask_obj is the ground truth annotation
         # using umask_obj we generate impulse
         image_obj = Image.fromarray(image, "RGB")
-        mask_obj = Image.fromarray(mask*255, "L")
-        umask_obj = Image.fromarray(umask*255, "L")
+        mask_obj = Image.fromarray(mask, "L")
+        umask_obj = Image.fromarray(umask, "L")
 
-        image_obj.show()
 
         # fliplr = (random.random() > 0.5)
         fliplr = False
-        coeff = self.random_coeff(image_obj.size,0.08,0.12)
+        coeff = self.random_coeff(mask,0.08,0.12)
+
         image_obj = self.resize_image(image_obj, (448, 448), "RGB", coeff, fliplr)
         mask_obj = self.resize_image(mask_obj, (448, 448), "L", coeff, fliplr)
         umask_obj = self.resize_image(umask_obj, (448, 448), "L", coeff, fliplr)
-        print(class_id)
-        image_obj.show()
-        mask_obj.show()
+
         # # code to crop stuff y1, x1, y2, x2
         # bbox = self.extract_bbox(np.array(mask_obj))
         # y1, x1, y2, x2 = bbox
@@ -239,8 +237,9 @@ class CocoDataset(torch.utils.data.Dataset):
         while True:
             yield random.uniform(min_dis, max_dis)
 
-    def random_coeff(self, size, min_dis, max_dis):
-        width,height = size
+    def random_coeff(self, mask, min_dis, max_dis):
+        width,height = mask.shape
+        y1,x1,y2,x2 = self.extract_bbox(mask)
         m = self.distort_gen(min_dis, max_dis)
         pi = [(0, 0), (width, 0), (0, height), (width, height)]
         pf = [(0 - next(m) * width, 0 - next(m) * height), (width + next(m) * width, 0 - next(m) * height),
